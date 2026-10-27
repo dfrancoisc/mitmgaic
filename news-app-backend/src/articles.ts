@@ -68,7 +68,13 @@ export async function listArticles(db: D1Database, params: URLSearchParams) {
 		${where.length ? `WHERE ${where.join(" AND ")}` : ""}
 		ORDER BY published_at DESC NULLS LAST, relevance_score DESC, id DESC
 		LIMIT ?`;
-	const { results } = await db.prepare(sql).bind(...binds, limit).all<Article>();
+	const [articles, latest] = await db.batch([
+		db.prepare(sql).bind(...binds, limit),
+		// Across all articles, not just the filtered ones, so it reflects the last agent run that stored data.
+		db.prepare("SELECT MAX(fetched_at) AS last_refreshed FROM articles"),
+	]);
+	const results = articles.results as Article[];
+	const lastRefreshed = (latest.results[0] as { last_refreshed: string | null } | undefined)?.last_refreshed ?? null;
 
-	return { count: results.length, articles: results };
+	return { count: results.length, last_refreshed: lastRefreshed, articles: results };
 }

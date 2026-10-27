@@ -1,0 +1,13 @@
+{
+	"$schema": "../news-app-backend/node_modules/wrangler/config-schema.json",
+	"name": "news-app-frontend",
+	"compatibility_date": "2026-10-23",
+	// Static dashboard only: no Worker script, bindings or schedules.
+	"assets": {
+		"directory": "./public",
+	},
+	// Explicitly empty so a deploy clears any schedules left on this Worker name.
+	"triggers": {
+		"crons": [],
+	},
+}

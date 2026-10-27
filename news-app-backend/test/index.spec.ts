@@ -54,6 +54,7 @@ describe("/articles", () => {
 	it("returns all articles newest first with a count", async () => {
 		const body = await (await SELF.fetch("https://x/articles")).json<any>();
 		expect(body.count).toBe(3);
+		expect(body.last_refreshed).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 		expect(body.articles.map((a: any) => a.headline)).toEqual(["C", "B", "A"]);
 	});
 

@@ -140,7 +140,7 @@ Return up to 10 distinct articles from reputable sources. For each one provide:
 - source: the publication name
 - published_date: publication date as YYYY-MM-DD, or null if unknown
 - url: the canonical article URL
-- summary: a 2-3 sentence summary of the article in your own words
+- summary: a 2-3 sentence summary of the article in your own words, describing only that article (readers see it on its own, so don't mention other articles, this request or what is already stored)
 - relevance_score: an integer from 1 to 10 for how relevant and significant the article is to "${topic}"
 ${knownUrls.length > 0 ? `\nThese URLs are already stored, so skip them:\n${knownUrls.join("\n")}\n` : ""}
 Respond with only a JSON array of objects with exactly those keys.`;
