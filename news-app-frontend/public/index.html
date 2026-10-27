@@ -28,7 +28,40 @@
 			</div>
 		</header>
 
-		<main class="container">
+		<main class="container layout">
+			<aside class="chat-panel" aria-labelledby="chat-title">
+				<div class="chat-header">
+					<h2 id="chat-title">Ask about the news</h2>
+					<p class="chat-hint">Answers use only the stored articles, with numbered sources.</p>
+				</div>
+
+				<div class="chat-thread" id="chat-thread" aria-live="polite">
+					<div class="chat-empty" id="chat-empty">
+						<p>Try one of these:</p>
+						<button type="button" class="suggestion">What does the HTI-5 rule change?</button>
+						<button type="button" class="suggestion">What's new in AI in healthcare this week?</button>
+						<button type="button" class="suggestion">Summarize the biggest cloud and data platform news.</button>
+					</div>
+				</div>
+
+				<form class="chat-form" id="chat-form">
+					<label class="visually-hidden" for="chat-input">Your question</label>
+					<textarea id="chat-input" rows="2" maxlength="2000" placeholder="Ask a question about these articles…" required></textarea>
+					<div class="chat-controls">
+						<label class="model-picker">
+							<span>Model</span>
+							<select id="chat-model">
+								<option value="opus">Opus 5.5 · most capable</option>
+								<option value="sonnet">Sonnet 5.5 · balanced</option>
+								<option value="haiku">Haiku 5.5 · fastest</option>
+							</select>
+						</label>
+						<button type="submit" class="btn btn-primary" id="chat-submit">Ask</button>
+					</div>
+				</form>
+			</aside>
+
+			<div class="content">
 			<form class="filters" id="filters" aria-label="Filter articles">
 				<label class="field">
 					<span>Topic</span>
@@ -70,6 +103,7 @@
 					</div>
 				</div>
 			</div>
+			</div>
 		</main>
 
 		<footer class="container footer">
@@ -90,5 +124,6 @@
 		</template>
 
 		<script src="app.js"></script>
+		<script src="chat.js"></script>
 	</body>
 </html>
