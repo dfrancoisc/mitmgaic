@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { type ArticleForIndex, deleteArticleVectors, indexArticles } from "./embeddings";
 import { AGENT_MODEL } from "./models";
 
 export const TOPICS = [
@@ -6,7 +7,39 @@ export const TOPICS = [
 	"AI in healthcare",
 	"Artificial intelligence",
 	"Data platforms & cloud",
+	"Stock & market news",
 ] as const;
+
+export type Topic = (typeof TOPICS)[number];
+
+interface TopicFocus {
+	/** Narrows what the web search looks for. */
+	search: string;
+	/** What relevance_score measures for this topic. */
+	relevance: string;
+	/** Appended to the summary instruction. */
+	summary?: string;
+}
+
+// Extra guidance for topics whose name alone is too broad.
+const TOPIC_FOCUS: Partial<Record<Topic, TopicFocus>> = {
+	// Tracks news that could move these Vanguard funds. Informational only, not investment advice.
+	"Stock & market news": {
+		search: `news likely to affect these Vanguard funds:
+  - VTI (Total Stock Market ETF): the whole US stock market
+  - VTV (Value ETF): US large-cap value stocks, heavy in financials, healthcare, industrials, energy and consumer staples, and their largest holdings
+  - VXUS (Total International Stock ETF): developed and emerging markets outside the US
+  - VASGX (LifeStrategy Growth Fund): about 80% US and international stocks and 20% US and international bonds
+Relevant: broad US and international market moves; Federal Reserve and interest-rate decisions; Treasury yields and bond markets; inflation, jobs and GDP data; earnings or major events at the largest holdings of these funds; moves in value sectors; the US dollar and currencies; major foreign economies (Europe, Japan, China, emerging markets); trade policy and tariffs; and Vanguard announcements about these funds (fees, distributions, changes).
+Skip news about small individual companies, single stocks with little weight in these funds, crypto, and investment advice or stock picks`,
+		relevance: "how much the news could affect VTI, VTV, VXUS or VASGX",
+		summary: "End the summary with which of VTI, VTV, VXUS and VASGX it most affects, and why, in a few words.",
+	},
+};
+
+export function isTopic(value: unknown): value is Topic {
+	return typeof value === "string" && (TOPICS as readonly string[]).includes(value);
+}
 
 const MAX_ARTICLES_PER_TOPIC = 20;
 // A web search turn can pause server-side after 10 iterations; resume a few times at most.
@@ -29,6 +62,8 @@ export interface TopicResult {
 	invalid: number;
 	removed: number;
 	error?: string;
+	/** Set if the articles were stored but the semantic index couldn't be updated. */
+	vector_error?: string;
 }
 
 export interface AgentResult {
@@ -40,14 +75,15 @@ export interface AgentResult {
 	finished_at: string;
 }
 
-export async function runAgent(env: Env): Promise<AgentResult> {
+/** Runs the pipeline for every topic, or only the ones given. */
+export async function runAgent(env: Env, only: readonly Topic[] = TOPICS): Promise<AgentResult> {
 	const startedAt = new Date().toISOString();
 	const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
 	// Topics are independent, so run them concurrently to keep the request short.
 	const topics = await Promise.all(
-		TOPICS.map((topic) =>
-			runTopic(client, env.DB, topic).catch(
+		only.map((topic) =>
+			runTopic(client, env, topic).catch(
 				(err): TopicResult => ({
 					topic,
 					returned: 0,
@@ -71,7 +107,8 @@ export async function runAgent(env: Env): Promise<AgentResult> {
 	};
 }
 
-async function runTopic(client: Anthropic, db: D1Database, topic: string): Promise<TopicResult> {
+async function runTopic(client: Anthropic, env: Env, topic: string): Promise<TopicResult> {
+	const db = env.DB;
 	const known = await db
 		.prepare("SELECT url FROM articles WHERE topic = ? ORDER BY published_at DESC LIMIT ?")
 		.bind(topic, MAX_ARTICLES_PER_TOPIC)
@@ -80,7 +117,8 @@ async function runTopic(client: Anthropic, db: D1Database, topic: string): Promi
 	const text = await searchNews(client, topic, known.results.map((r) => r.url));
 	const raw = extractJsonArray(text);
 	const { articles, invalid } = normalizeArticles(raw);
-	const { inserted, removed } = await storeArticles(db, topic, articles);
+	const { inserted, removed, toIndex, removedIds } = await storeArticles(db, topic, articles);
+	const vectorError = await syncVectors(env, toIndex, removedIds);
 
 	return {
 		topic,
@@ -89,6 +127,7 @@ async function runTopic(client: Anthropic, db: D1Database, topic: string): Promi
 		skipped: articles.length - inserted,
 		invalid,
 		removed,
+		...(vectorError ? { vector_error: vectorError } : {}),
 	};
 }
 
@@ -96,24 +135,26 @@ export async function storeArticles(
 	db: D1Database,
 	topic: string,
 	articles: CandidateArticle[],
-): Promise<{ inserted: number; removed: number }> {
+): Promise<{ inserted: number; removed: number; toIndex: ArticleForIndex[]; removedIds: number[] }> {
 	// Duplicate URLs inside one response count as skipped, same as URLs already stored.
 	const seen = new Set<string>();
 	const unique = articles.filter((a) => !seen.has(a.url) && seen.add(a.url));
 
-	let inserted = 0;
+	const insertedRows: ArticleForIndex[] = [];
 	if (unique.length > 0) {
+		// RETURNING yields a row only for articles actually inserted (not URL conflicts).
 		const insert = db.prepare(
 			`INSERT INTO articles (topic, headline, source, published_at, url, summary, relevance_score)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(url) DO NOTHING`,
+			 ON CONFLICT(url) DO NOTHING
+			 RETURNING id, topic, headline, summary, source, published_at`,
 		);
-		const results = await db.batch(
+		const results = await db.batch<ArticleForIndex>(
 			unique.map((a) =>
 				insert.bind(topic, a.headline, a.source, a.published_date, a.url, a.summary, a.relevance_score),
 			),
 		);
-		inserted = results.reduce((n, r) => n + (r.meta.changes ?? 0), 0);
+		for (const r of results) insertedRows.push(...r.results);
 	}
 
 	// Keep only the newest articles per topic; undated articles are treated as oldest.
@@ -123,25 +164,46 @@ export async function storeArticles(
 				SELECT id FROM articles WHERE topic = ?1
 				ORDER BY published_at DESC NULLS LAST, fetched_at DESC, id DESC
 				LIMIT ?2
-			)`,
+			)
+			RETURNING id`,
 		)
 		.bind(topic, MAX_ARTICLES_PER_TOPIC)
-		.run();
+		.all<{ id: number }>();
+	const removedIds = pruned.results.map((r) => r.id);
+	const removedSet = new Set(removedIds);
 
-	return { inserted, removed: pruned.meta.changes ?? 0 };
+	return {
+		inserted: insertedRows.length,
+		removed: removedIds.length,
+		// An article can be inserted and pruned in the same run; it needs no vector.
+		toIndex: insertedRows.filter((r) => !removedSet.has(r.id)),
+		removedIds,
+	};
+}
+
+/** Mirrors a topic's inserts and prunes into the vector index. Never fails the pipeline: D1 stays the source of truth. */
+async function syncVectors(env: Env, toIndex: ArticleForIndex[], removedIds: number[]): Promise<string | undefined> {
+	try {
+		await Promise.all([indexArticles(env, toIndex), deleteArticleVectors(env, removedIds)]);
+		return undefined;
+	} catch (err) {
+		console.error("Vector index sync failed", err);
+		return err instanceof Error ? err.message : String(err);
+	}
 }
 
 async function searchNews(client: Anthropic, topic: string, knownUrls: string[]): Promise<string> {
 	const today = new Date().toISOString().slice(0, 10);
-	const prompt = `Today is ${today}. Use web search to find the most important news articles about "${topic}" published in the last 7 days.
+	const focus = isTopic(topic) ? TOPIC_FOCUS[topic] : undefined;
+	const prompt = `Today is ${today}. Use web search to find the most important news articles about "${topic}" published in the last 7 days.${focus ? `\nFocus only on ${focus.search}.` : ""}
 
 Return up to 10 distinct articles from reputable sources. For each one provide:
 - headline: the article's headline
 - source: the publication name
 - published_date: publication date as YYYY-MM-DD, or null if unknown
 - url: the canonical article URL
-- summary: a 2-3 sentence summary of the article in your own words, describing only that article (readers see it on its own, so don't mention other articles, this request or what is already stored)
-- relevance_score: an integer from 1 to 10 for how relevant and significant the article is to "${topic}"
+- summary: a 2-3 sentence summary of the article in your own words, describing only that article (readers see it on its own, so don't mention other articles, this request or what is already stored)${focus?.summary ? `. ${focus.summary}` : ""}
+- relevance_score: an integer from 1 to 10 for ${focus ? focus.relevance : `how relevant and significant the article is to "${topic}"`}
 ${knownUrls.length > 0 ? `\nThese URLs are already stored, so skip them:\n${knownUrls.join("\n")}\n` : ""}
 Respond with only a JSON array of objects with exactly those keys.`;
 

@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Article } from "./articles";
 import { BadRequest } from "./articles";
+import { semanticSearch } from "./embeddings";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, modelName } from "./models";
 
 // Model choices live in models.ts; full model IDs are accepted as-is.
@@ -12,6 +13,7 @@ const SUPPORTS_DYNAMIC_WEB_SEARCH = new Set(["claude-opus-5-5", "claude-sonnet-5
 
 const MAX_QUESTION_CHARS = 2000;
 const CONTEXT_ARTICLES = 12;
+const SEMANTIC_CANDIDATES = 30;
 const RECENT_DAYS = 30;
 const MAX_WEB_SEARCHES = 3;
 // A web search turn can pause server-side; resume a few times at most.
@@ -48,6 +50,8 @@ export interface ChatSource {
 	published_at: string | null;
 	url: string;
 	relevance_score: number | null;
+	/** Cosine similarity between the question and the article (semantic retrieval only). */
+	similarity: number | null;
 }
 
 export interface WebSource {
@@ -65,7 +69,63 @@ export interface ChatResult {
 	sources: ChatSource[];
 	web_sources: WebSource[];
 	context: { articles: number; tokens: number; estimated: boolean };
+	retrieval: { method: RetrievalMethod; fallback_reason?: string; top_similarity: number | null };
 	usage: { input_tokens: number; output_tokens: number; web_search_requests: number };
+}
+
+export type RetrievalMethod = "semantic" | "keyword";
+
+interface Retrieval {
+	articles: Article[];
+	method: RetrievalMethod;
+	/** Cosine similarity per article id (semantic search only). */
+	similarity: Map<number, number>;
+	fallbackReason?: string;
+}
+
+/**
+ * Picks the context articles for a question: semantic search over Vectorize first (closest meaning),
+ * falling back to keyword ranking if the index is empty or Workers AI / Vectorize is unavailable.
+ */
+export async function retrieveContext(env: Pick<Env, "DB" | "AI" | "VECTORIZE">, question: string): Promise<Retrieval> {
+	const since = new Date(Date.now() - RECENT_DAYS * 86_400_000).toISOString().slice(0, 10);
+
+	let fallbackReason: string;
+	try {
+		// Over-fetch: some matches may be older than the recency window or already pruned from D1.
+		const matches = await semanticSearch(env, question, SEMANTIC_CANDIDATES);
+		if (matches.length > 0) {
+			const ids = matches.map((m) => m.id);
+			const { results } = await env.DB.prepare(
+				`SELECT * FROM articles WHERE id IN (${ids.map(() => "?").join(",")}) AND (published_at IS NULL OR published_at >= ?)`,
+			)
+				.bind(...ids, since)
+				.all<Article>();
+			const byId = new Map(results.map((a) => [a.id, a]));
+			const ranked = matches.flatMap((m) => byId.get(m.id) ?? []).slice(0, CONTEXT_ARTICLES);
+			if (ranked.length > 0) {
+				return { articles: ranked, method: "semantic", similarity: new Map(matches.map((m) => [m.id, m.score])) };
+			}
+			fallbackReason = "no indexed articles in the recency window";
+		} else {
+			fallbackReason = "vector index is empty";
+		}
+	} catch (err) {
+		console.error("Semantic search failed; using keyword ranking", err);
+		fallbackReason = "semantic search unavailable";
+	}
+
+	const { results } = await env.DB.prepare(
+		"SELECT * FROM articles WHERE published_at IS NULL OR published_at >= ? ORDER BY published_at DESC NULLS LAST",
+	)
+		.bind(since)
+		.all<Article>();
+	return {
+		articles: rankArticles(question, results).slice(0, CONTEXT_ARTICLES),
+		method: "keyword",
+		similarity: new Map(),
+		fallbackReason,
+	};
 }
 
 export interface ChatRequest {
@@ -130,14 +190,8 @@ export function rankArticles(question: string, articles: Article[], now = new Da
 }
 
 export async function chat(env: Env, { question, model, webSearch }: ChatRequest): Promise<ChatResult> {
-	const since = new Date(Date.now() - RECENT_DAYS * 86_400_000).toISOString().slice(0, 10);
-	const { results } = await env.DB.prepare(
-		"SELECT * FROM articles WHERE published_at IS NULL OR published_at >= ? ORDER BY published_at DESC NULLS LAST",
-	)
-		.bind(since)
-		.all<Article>();
-
-	const context = rankArticles(question, results).slice(0, CONTEXT_ARTICLES);
+	const retrieval = await retrieveContext(env, question);
+	const context = retrieval.articles;
 	const sources: ChatSource[] = context.map((a, i) => ({
 		ref: i + 1,
 		id: a.id,
@@ -147,6 +201,7 @@ export async function chat(env: Env, { question, model, webSearch }: ChatRequest
 		published_at: a.published_at,
 		url: a.url,
 		relevance_score: a.relevance_score,
+		similarity: retrieval.similarity.get(a.id) ?? null,
 	}));
 
 	const articleText = context.length
@@ -247,6 +302,11 @@ export async function chat(env: Env, { question, model, webSearch }: ChatRequest
 		sources,
 		web_sources: [...webSources.values()],
 		context: { articles: context.length, tokens: counted.tokens, estimated: counted.estimated },
+		retrieval: {
+			method: retrieval.method,
+			...(retrieval.fallbackReason ? { fallback_reason: retrieval.fallbackReason } : {}),
+			top_similarity: context.length ? (retrieval.similarity.get(context[0].id) ?? null) : null,
+		},
 		usage: { input_tokens: inputTokens, output_tokens: outputTokens, web_search_requests: webSearches },
 	};
 }

@@ -70,28 +70,34 @@
 		if (!llmConfig) return;
 		const opt = selectedOption();
 		if (opt) {
-			modelLine.replaceChildren(
-				document.createTextNode("Using "),
-				el("strong", null, opt.name),
-				document.createTextNode(" "),
-				el("code", null, opt.model),
-			);
-			modelLine.parentElement.title = `${opt.name} via the ${llmConfig.provider}. Configured in ${llmConfig.configured_in.file}`;
+			modelLine.replaceChildren(document.createTextNode("Using "), el("strong", null, opt.name));
+			// Exact model IDs stay available on hover without taking space.
+			modelLine.parentElement.title = `${opt.name} (${opt.model}) via the ${llmConfig.provider}. Configured in ${llmConfig.configured_in.file}`;
 		}
 
+		// The highlighted row marks the model in use.
 		const rows = llmConfig.chat.options.map((o) => {
 			const value = el("dd");
-			value.append(el("span", null, `${o.name} `), el("code", null, o.model));
-			if (o.key === opt?.key) value.append(el("span", "in-use-tag", "in use"));
-			value.append(el("span", "config-note", o.description));
+			value.append(el("span", null, o.name), el("span", "config-note", o.description));
+			value.title = o.model;
 			const row = configRow(`Chat · ${capitalize(o.key)}`, value);
 			if (o.key === opt?.key) row.classList.add("in-use");
 			return row;
 		});
 
 		const pipeline = el("dd");
-		pipeline.append(el("span", null, `${llmConfig.pipeline.name} `), el("code", null, llmConfig.pipeline.model), el("span", "config-note", llmConfig.pipeline.used_by));
+		pipeline.append(el("span", null, llmConfig.pipeline.name), el("span", "config-note", llmConfig.pipeline.used_by));
+		pipeline.title = llmConfig.pipeline.model;
 		rows.push(configRow("News pipeline", pipeline));
+
+		if (llmConfig.retrieval) {
+			const ret = el("dd");
+			ret.append(
+				el("span", null, llmConfig.retrieval.method),
+				el("span", "config-note", `${llmConfig.retrieval.embedding_model} (${llmConfig.retrieval.embedding_provider}) · ${llmConfig.retrieval.vector_index}`),
+			);
+			rows.push(configRow("Retrieval", ret));
+		}
 
 		rows.push(configRow("Provider", llmConfig.provider));
 
@@ -243,6 +249,11 @@
 				const li = document.createElement("li");
 				li.value = s.ref;
 				li.append(link(s.url, s.headline), document.createTextNode(` · ${s.source || "Unknown"}${s.published_at ? `, ${s.published_at}` : ""}`));
+				if (typeof s.similarity === "number") {
+					const m = el("span", "match", `${Math.round(s.similarity * 100)}% match`);
+					m.title = `Semantic similarity to your question (cosine ${s.similarity.toFixed(3)})`;
+					li.append(m);
+				}
 				list.append(li);
 			}
 			body.append(sourcesBlock(`Article sources (${shown.length})`, list));
@@ -267,6 +278,14 @@
 			chip(fmt.format(data.usage.output_tokens), "out"),
 			chip(String(data.context.articles), data.context.articles === 1 ? "article" : "articles"),
 		);
+		if (data.retrieval) {
+			const semantic = data.retrieval.method === "semantic";
+			const r = el("span", `chip ${semantic ? "semantic" : "fallback"}`, semantic ? "Semantic search" : "Keyword fallback");
+			r.title = semantic
+				? "Context chosen by meaning: the question was embedded and matched against article vectors in Vectorize"
+				: `Semantic search wasn't used (${data.retrieval.fallback_reason ?? "unavailable"}); context chosen by keyword match`;
+			row.append(r);
+		}
 		if (data.web_search) row.append(chip(String(data.usage.web_search_requests), data.usage.web_search_requests === 1 ? "web search" : "web searches"));
 		// A safety fallback can hand the request to another model; say so rather than mislabel the answer.
 		if (data.requested_model && data.model !== data.requested_model) {
@@ -306,6 +325,18 @@
 		set("searches", data.web_search ? fmt.format(data.usage.web_search_requests) : "Off");
 		set("model", data.model_name ?? data.model);
 		stats.model.title = data.model;
+
+		const line = document.getElementById("retrieval-line");
+		const r = data.retrieval;
+		if (r?.method === "semantic") {
+			line.replaceChildren(
+				document.createTextNode("Retrieval: "),
+				el("strong", null, "semantic search"),
+				document.createTextNode(r.top_similarity != null ? ` · best match ${Math.round(r.top_similarity * 100)}%` : ""),
+			);
+		} else if (r) {
+			line.replaceChildren(document.createTextNode("Retrieval: "), el("strong", null, "keyword fallback"), document.createTextNode(` · ${r.fallback_reason ?? "semantic search unavailable"}`));
+		}
 	}
 
 	// Minimal, safe Markdown: paragraphs, "-" and "1." lists, **bold**, and [n] citations. Builds DOM nodes, never HTML strings.

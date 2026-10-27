@@ -1,8 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { runAgent } from "./agent";
+import { isTopic, runAgent, TOPICS } from "./agent";
 import { BadRequest, listArticles } from "./articles";
 import { chat, ChatRefused, parseChatRequest } from "./chat";
-import { modelConfig } from "./models";
+import { type ArticleForIndex, indexArticles } from "./embeddings";
+import { EMBEDDING_MODEL, modelConfig, VECTOR_INDEX } from "./models";
 
 const CORS_HEADERS = {
 	"Access-Control-Allow-Origin": "*",
@@ -70,8 +71,25 @@ export default {
 					{
 						const denied = await requirePassword(request, env);
 						if (denied) return denied;
+						// Optional ?topic=... runs a single topic (e.g. after changing its focus).
+						const topic = url.searchParams.get("topic");
+						if (topic !== null && !isTopic(topic)) {
+							return json({ error: `Unknown topic. Use one of: ${TOPICS.join(", ")}` }, 400);
+						}
+						return json(await runAgent(env, topic ? [topic] : undefined));
 					}
-					return json(await runAgent(env));
+
+				case "/reindex": {
+					// Rebuilds the semantic index from D1 (backfill or repair). Idempotent: upsert replaces vectors by id.
+					if (request.method !== "POST") return json({ error: "Use POST to rebuild the index" }, 405);
+					const denied = await requirePassword(request, env);
+					if (denied) return denied;
+					const { results } = await env.DB.prepare(
+						"SELECT id, topic, headline, summary, source, published_at FROM articles ORDER BY id",
+					).all<ArticleForIndex>();
+					const indexed = await indexArticles(env, results);
+					return json({ indexed, index: VECTOR_INDEX, embedding_model: EMBEDDING_MODEL });
+				}
 
 				case "/models":
 					// Public and non-secret: which Claude models the app uses and where that's configured.

@@ -14,6 +14,10 @@ export const CHAT_MODELS: Record<string, string> = {
 	opus: "claude-opus-5-5",
 };
 
+/** Workers AI embedding model for semantic search (768 dimensions; the Vectorize index must match). */
+export const EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5";
+export const VECTOR_INDEX = "news-articles";
+
 /** Used when a chat request doesn't name a model. */
 export const DEFAULT_CHAT_MODEL = CHAT_MODELS.capable;
 
@@ -56,6 +60,12 @@ export function modelConfig() {
 			model: AGENT_MODEL,
 			name: modelName(AGENT_MODEL),
 			used_by: "Refresh button and the daily 7 AM run",
+		},
+		retrieval: {
+			method: "Semantic search",
+			embedding_model: EMBEDDING_MODEL,
+			embedding_provider: "Cloudflare Workers AI",
+			vector_index: `Cloudflare Vectorize index "${VECTOR_INDEX}" (cosine)`,
 		},
 	};
 }

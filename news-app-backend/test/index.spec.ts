@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { extractJsonArray, normalizeArticles, storeArticles, type CandidateArticle } from "../src/agent";
 import type { Article } from "../src/articles";
-import { parseChatRequest, rankArticles, resolveModel } from "../src/chat";
+import { parseChatRequest, rankArticles, resolveModel, retrieveContext } from "../src/chat";
 import { isSevenAmInNewYork } from "../src/index";
 
 const SELF = exports.default;
@@ -134,15 +134,24 @@ describe("storing articles", () => {
 	beforeEach(() => env.DB.exec("DELETE FROM articles"));
 
 	it("skips URLs already stored or repeated in the same batch", async () => {
-		expect(await storeArticles(env.DB, "T", [article(1, 1), article(2, 2)])).toEqual({ inserted: 2, removed: 0 });
+		const first = await storeArticles(env.DB, "T", [article(1, 1), article(2, 2)]);
+		expect(first).toMatchObject({ inserted: 2, removed: 0, removedIds: [] });
+		expect(first.toIndex.map((r) => r.headline)).toEqual(["H1", "H2"]);
 		const again = await storeArticles(env.DB, "T", [article(1, 1), article(3, 3), article(3, 3)]);
-		expect(again).toEqual({ inserted: 1, removed: 0 });
+		expect(again).toMatchObject({ inserted: 1, removed: 0 });
+		// Only the newly inserted article needs a vector.
+		expect(again.toIndex.map((r) => r.headline)).toEqual(["H3"]);
 	});
 
 	it("caps each topic at 20 by removing the oldest", async () => {
 		await storeArticles(env.DB, "Other", [article(100, 1)]);
 		const batch = Array.from({ length: 25 }, (_, i) => article(i, i + 1)); // days 1..25
-		expect(await storeArticles(env.DB, "T", batch)).toEqual({ inserted: 25, removed: 5 });
+		const stored = await storeArticles(env.DB, "T", batch);
+		expect(stored).toMatchObject({ inserted: 25, removed: 5 });
+		// The 5 oldest were inserted and pruned in the same run: their vectors are deleted, never indexed.
+		expect(stored.removedIds).toHaveLength(5);
+		expect(stored.toIndex).toHaveLength(20);
+		expect(stored.toIndex.some((r) => stored.removedIds.includes(r.id))).toBe(false);
 
 		const { results } = await env.DB.prepare("SELECT MIN(published_at) AS oldest, COUNT(*) AS n FROM articles WHERE topic = 'T'").all<{ oldest: string; n: number }>();
 		expect(results[0]).toEqual({ oldest: "2026-10-06", n: 20 });
@@ -215,6 +224,76 @@ describe("/chat", () => {
 		expect(rankArticles("What changed in the HTI-5 rule?", list, now).map((a) => a.id)).toEqual([2, 3]);
 		// No keyword overlap: every article stays in, ordered by relevance score plus freshness.
 		expect(rankArticles("what's going on?", list, now).map((a) => a.id)).toEqual([2, 3, 1]);
+	});
+});
+
+describe("semantic retrieval", () => {
+	// Fakes stand in for Workers AI and Vectorize, which only exist remotely.
+	const fakeAi = (fail = false) =>
+		({
+			run: async (_model: string, input: { text: string[] }) => {
+				if (fail) throw new Error("AI unavailable");
+				return { shape: [input.text.length, 3], data: input.text.map(() => [0.1, 0.2, 0.3]) };
+			},
+		}) as unknown as Ai;
+	const fakeIndex = (matches: { id: string; score: number }[]) =>
+		({ query: async () => ({ matches, count: matches.length }) }) as unknown as VectorizeIndex;
+
+	let ids: number[] = [];
+	beforeEach(async () => {
+		await env.DB.exec("DELETE FROM articles");
+		const today = new Date().toISOString().slice(0, 10);
+		const insert = env.DB.prepare(
+			"INSERT INTO articles (topic, headline, summary, published_at, url, relevance_score) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+		);
+		const rows = await env.DB.batch<{ id: number }>([
+			insert.bind("Healthcare IT & interoperability", "ONC finalizes HTI-5", "Certification criteria cut", today, "https://x/1", 9),
+			insert.bind("Data platforms & cloud", "Snowflake on OCI", "Oracle partnership", today, "https://x/2", 6),
+			insert.bind("AI in healthcare", "Old story", "From last year", "2025-01-01", "https://x/3", 10),
+		]);
+		ids = rows.map((r) => r.results[0].id);
+	});
+
+	it("orders context by similarity, skipping stale and missing articles", async () => {
+		const [hti5, snowflake, old] = ids;
+		const r = await retrieveContext(
+			{
+				DB: env.DB,
+				AI: fakeAi(),
+				VECTORIZE: fakeIndex([
+					{ id: String(snowflake), score: 0.91 },
+					{ id: String(old), score: 0.88 }, // outside the 30-day window
+					{ id: "999999", score: 0.85 }, // vector whose article was already pruned
+					{ id: String(hti5), score: 0.74 },
+				]),
+			},
+			"cloud data warehouses",
+		);
+		expect(r.method).toBe("semantic");
+		expect(r.articles.map((a) => a.id)).toEqual([snowflake, hti5]);
+		expect(r.similarity.get(snowflake)).toBe(0.91);
+	});
+
+	it("falls back to keyword ranking when the index is empty", async () => {
+		const r = await retrieveContext({ DB: env.DB, AI: fakeAi(), VECTORIZE: fakeIndex([]) }, "HTI-5 certification");
+		expect(r).toMatchObject({ method: "keyword", fallbackReason: "vector index is empty" });
+		expect(r.articles[0].headline).toBe("ONC finalizes HTI-5");
+	});
+
+	it("falls back to keyword ranking when Workers AI fails", async () => {
+		const r = await retrieveContext({ DB: env.DB, AI: fakeAi(true), VECTORIZE: fakeIndex([]) }, "HTI-5");
+		expect(r).toMatchObject({ method: "keyword", fallbackReason: "semantic search unavailable" });
+	});
+
+	it("rejects an unknown ?topic= on /agent before running anything", async () => {
+		const res = await SELF.fetch("https://x/agent?topic=Crypto", { method: "POST", headers: { Authorization: "Bearer test-agent-secret" } });
+		expect(res.status).toBe(400);
+		expect((await res.json<any>()).error).toContain("Stock & market news");
+	});
+
+	it("protects /reindex with the API password", async () => {
+		expect((await SELF.fetch("https://x/reindex")).status).toBe(405);
+		expect((await SELF.fetch("https://x/reindex", { method: "POST" })).status).toBe(401);
 	});
 });
 

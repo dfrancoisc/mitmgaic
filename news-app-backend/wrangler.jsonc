@@ -11,6 +11,9 @@
 	"triggers": {
 		"crons": ["0 11 * * *", "0 12 * * *"],
 	},
+	// Semantic search: Workers AI embeds text, Vectorize stores one vector per article (id = articles.id).
+	"ai": { "binding": "AI" },
+	"vectorize": [{ "binding": "VECTORIZE", "index_name": "news-articles" }],
 	"d1_databases": [
 		{
 			"binding": "DB",

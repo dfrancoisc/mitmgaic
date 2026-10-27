@@ -6,7 +6,13 @@ const TOPICS = [
 	"AI in healthcare",
 	"Artificial intelligence",
 	"Data platforms & cloud",
+	"Stock & market news",
 ];
+
+// Shown under a topic heading. Keep in sync with TOPIC_FOCUS in news-app-backend/src/agent.ts.
+const TOPIC_NOTES = {
+	"Stock & market news": "News that could affect VTI · VTV · VXUS · VASGX (LifeStrategy Growth 80/20)",
+};
 
 const els = {
 	filters: document.getElementById("filters"),
@@ -128,7 +134,7 @@ function render(articles) {
 		const section = document.createElement("section");
 		section.className = "topic-group";
 		const colorIndex = TOPICS.indexOf(topic);
-		if (colorIndex !== -1) section.style.setProperty("--topic-color", `var(--topic-${colorIndex % 4})`);
+		if (colorIndex !== -1) section.style.setProperty("--topic-color", `var(--topic-${colorIndex % 5})`);
 		const id = `topic-${slug(topic)}`;
 		section.setAttribute("aria-labelledby", id);
 
@@ -145,7 +151,14 @@ function render(articles) {
 		grid.className = "grid";
 		grid.append(...items.map(renderCard));
 
-		section.append(heading, grid);
+		section.append(heading);
+		if (TOPIC_NOTES[topic]) {
+			const note = document.createElement("p");
+			note.className = "topic-note";
+			note.textContent = TOPIC_NOTES[topic];
+			section.append(note);
+		}
+		section.append(grid);
 		sections.push(section);
 	}
 	els.articles.replaceChildren(...sections);
