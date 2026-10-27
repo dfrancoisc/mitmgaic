@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { runAgent } from "./agent";
 import { BadRequest, listArticles } from "./articles";
 import { chat, ChatRefused, parseChatRequest } from "./chat";
+import { modelConfig } from "./models";
 
 const CORS_HEADERS = {
 	"Access-Control-Allow-Origin": "*",
@@ -72,6 +73,10 @@ export default {
 					}
 					return json(await runAgent(env));
 
+				case "/models":
+					// Public and non-secret: which Claude models the app uses and where that's configured.
+					return json(modelConfig());
+
 				case "/chat": {
 					if (request.method !== "POST") {
 						return json({ error: 'Use POST with a JSON body like {"question": "...", "model": "sonnet"}' }, 405);
@@ -95,7 +100,7 @@ export default {
 					return json(await listArticles(env.DB, url.searchParams));
 
 				default:
-					return json({ error: "Not found", endpoints: ["/health", "/agent", "/articles", "/chat"] }, 404);
+					return json({ error: "Not found", endpoints: ["/health", "/agent", "/articles", "/chat", "/models"] }, 404);
 			}
 		} catch (err) {
 			if (err instanceof BadRequest) return json({ error: err.message }, 400);

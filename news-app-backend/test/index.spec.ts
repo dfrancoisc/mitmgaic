@@ -66,9 +66,10 @@ describe("/agent authorization", () => {
 		}
 	});
 
-	it("keeps /health and /articles public", async () => {
+	it("keeps /health, /articles and /models public", async () => {
 		expect((await SELF.fetch("https://x/health")).status).toBe(200);
 		expect((await SELF.fetch("https://x/articles")).status).toBe(200);
+		expect((await SELF.fetch("https://x/models")).status).toBe(200);
 	});
 });
 
@@ -175,6 +176,24 @@ describe("/chat", () => {
 		expect(resolveModel("fast")).toBe("claude-haiku-5-5");
 		expect(resolveModel("capable")).toBe("claude-opus-5-5");
 		expect(() => resolveModel("claude-3-opus")).toThrow(/Unsupported model/);
+	});
+
+	it("publishes the LLM configuration on /models, matching what /chat resolves", async () => {
+		const res = await SELF.fetch("https://x/models");
+		expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+		const cfg = await res.json<any>();
+		expect(cfg.provider).toBe("Anthropic Claude API");
+		expect(cfg.configured_in.file).toBe("news-app-backend/src/models.ts");
+		expect(cfg.chat.options.map((o: any) => [o.key, o.model, o.name])).toEqual([
+			["fast", "claude-haiku-5-5", "Claude Haiku 5.5"],
+			["capable", "claude-opus-5-5", "Claude Opus 5.5"],
+		]);
+		for (const o of cfg.chat.options) expect(resolveModel(o.key)).toBe(o.model);
+		expect(cfg.chat.default_model).toBe(resolveModel(undefined));
+		expect(cfg.pipeline).toMatchObject({ model: "claude-opus-5-5", name: "Claude Opus 5.5" });
+		// Nothing secret leaks into the public config.
+		expect(JSON.stringify(cfg)).not.toContain("test-key");
+		expect(JSON.stringify(cfg)).not.toContain("test-agent-secret");
 	});
 
 	it("parses the web search toggle, defaulting to off", () => {

@@ -1,7 +1,6 @@
 // Chat panel: sends questions to the same-origin proxy (src/worker.js), which adds the API password.
 (() => {
 	const PREFS_KEY = "news-chat-prefs";
-	const MODEL_NAMES = { fast: "Fast · Haiku 5.5", capable: "Capable · Opus 5.5" };
 	const SPARK_ICON =
 		'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/></svg>';
 
@@ -14,9 +13,14 @@
 	const webToggle = document.getElementById("web-search-toggle");
 	const webBadge = document.getElementById("web-search-badge");
 	const stats = Object.fromEntries([...document.querySelectorAll("#hood-stats [data-stat]")].map((dd) => [dd.dataset.stat, dd]));
+	const modelLine = document.getElementById("model-line");
+	const configList = document.getElementById("llm-config-list");
+	const hood = document.getElementById("under-hood");
 
 	const fmt = new Intl.NumberFormat();
 	let busy = false;
+	// LLM configuration published by the backend (GET /models), so the UI always names the model actually called.
+	let llmConfig = null;
 
 	// Preferences: model choice and web search toggle survive reloads (best effort).
 	const prefs = loadPrefs();
@@ -25,7 +29,90 @@
 	}
 	setWebSearch(prefs.webSearch === true);
 
-	for (const i of modelInputs) i.addEventListener("change", savePrefs);
+	for (const i of modelInputs) {
+		i.addEventListener("change", () => {
+			savePrefs();
+			renderModelInfo();
+		});
+	}
+
+	document.getElementById("model-details-btn").addEventListener("click", () => {
+		hood.open = true;
+		document.getElementById("llm-config").scrollIntoView({ behavior: "smooth", block: "nearest" });
+	});
+
+	loadModelConfig();
+
+	async function loadModelConfig() {
+		try {
+			const res = await fetch(`${API_BASE}/models`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			llmConfig = await res.json();
+		} catch {
+			modelLine.textContent = "Model info unavailable";
+			configList.replaceChildren(configRow("Status", "Couldn't load the model configuration."));
+			return;
+		}
+		for (const opt of llmConfig.chat.options) {
+			const label = modelInputs.find((i) => i.value === opt.key)?.closest(".segment");
+			if (label) label.title = `${opt.name} (${opt.model}): ${opt.description}`;
+		}
+		const refresh = document.getElementById("refresh-btn");
+		refresh.title = `Runs the news pipeline with ${llmConfig.pipeline.name} (${llmConfig.pipeline.model})`;
+		renderModelInfo();
+	}
+
+	function selectedOption() {
+		return llmConfig?.chat.options.find((o) => o.key === currentModel());
+	}
+
+	function renderModelInfo() {
+		if (!llmConfig) return;
+		const opt = selectedOption();
+		if (opt) {
+			modelLine.replaceChildren(
+				document.createTextNode("Using "),
+				el("strong", null, opt.name),
+				document.createTextNode(" "),
+				el("code", null, opt.model),
+			);
+			modelLine.parentElement.title = `${opt.name} via the ${llmConfig.provider}. Configured in ${llmConfig.configured_in.file}`;
+		}
+
+		const rows = llmConfig.chat.options.map((o) => {
+			const value = el("dd");
+			value.append(el("span", null, `${o.name} `), el("code", null, o.model));
+			if (o.key === opt?.key) value.append(el("span", "in-use-tag", "in use"));
+			value.append(el("span", "config-note", o.description));
+			const row = configRow(`Chat · ${capitalize(o.key)}`, value);
+			if (o.key === opt?.key) row.classList.add("in-use");
+			return row;
+		});
+
+		const pipeline = el("dd");
+		pipeline.append(el("span", null, `${llmConfig.pipeline.name} `), el("code", null, llmConfig.pipeline.model), el("span", "config-note", llmConfig.pipeline.used_by));
+		rows.push(configRow("News pipeline", pipeline));
+
+		rows.push(configRow("Provider", llmConfig.provider));
+
+		const where = el("dd");
+		where.append(link(llmConfig.configured_in.url, llmConfig.configured_in.file), el("span", "config-note", "Change models here and redeploy the backend Worker."));
+		rows.push(configRow("Configured in", where));
+
+		rows.push(configRow("API key", llmConfig.api_key));
+		configList.replaceChildren(...rows);
+	}
+
+	function configRow(label, value) {
+		const row = document.createElement("div");
+		const dd = value instanceof Node ? value : el("dd", null, value);
+		row.append(el("dt", null, label), dd);
+		return row;
+	}
+
+	function capitalize(s) {
+		return s.charAt(0).toUpperCase() + s.slice(1);
+	}
 	webToggle.addEventListener("click", () => {
 		setWebSearch(webToggle.getAttribute("aria-checked") !== "true");
 		savePrefs();
@@ -172,13 +259,21 @@
 
 		// Token usage for this response, always visible.
 		const row = el("div", "usage-row");
+		const modelChip = el("span", "chip model", `${capitalize(modelChoice)} · ${data.model_name ?? data.model}`);
+		modelChip.title = `Answered by ${data.model}`;
 		row.append(
-			el("span", "chip model", MODEL_NAMES[modelChoice] ?? data.model),
+			modelChip,
 			chip(fmt.format(data.usage.input_tokens), "in"),
 			chip(fmt.format(data.usage.output_tokens), "out"),
 			chip(String(data.context.articles), data.context.articles === 1 ? "article" : "articles"),
 		);
 		if (data.web_search) row.append(chip(String(data.usage.web_search_requests), data.usage.web_search_requests === 1 ? "web search" : "web searches"));
+		// A safety fallback can hand the request to another model; say so rather than mislabel the answer.
+		if (data.requested_model && data.model !== data.requested_model) {
+			const fb = el("span", "chip fallback", `Fallback: ${data.requested_model} declined`);
+			fb.title = `${data.requested_model} declined this request, so ${data.model} answered instead.`;
+			row.append(fb);
+		}
 		body.append(row);
 	}
 
@@ -209,7 +304,8 @@
 		set("input", fmt.format(data.usage.input_tokens));
 		set("output", fmt.format(data.usage.output_tokens));
 		set("searches", data.web_search ? fmt.format(data.usage.web_search_requests) : "Off");
-		set("model", data.model.replace(/^claude-/, ""));
+		set("model", data.model_name ?? data.model);
+		stats.model.title = data.model;
 	}
 
 	// Minimal, safe Markdown: paragraphs, "-" and "1." lists, **bold**, and [n] citations. Builds DOM nodes, never HTML strings.
@@ -251,7 +347,10 @@
 		for (const m of text.matchAll(re)) {
 			if (m.index > last) nodes.push(document.createTextNode(text.slice(last, m.index)));
 			if (m[1] !== undefined) {
-				nodes.push(el("strong", null, m[1]));
+				// Bold text can itself contain citations, e.g. **[1] Headline**.
+				const strong = el("strong");
+				strong.append(...inline(m[1], urls));
+				nodes.push(strong);
 			} else {
 				const ref = Number(m[2]);
 				const a = link(urls.get(ref), String(ref));

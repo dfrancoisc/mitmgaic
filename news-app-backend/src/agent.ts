@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { AGENT_MODEL } from "./models";
 
 export const TOPICS = [
 	"Healthcare IT & interoperability",
@@ -7,7 +8,6 @@ export const TOPICS = [
 	"Data platforms & cloud",
 ] as const;
 
-const MODEL = "claude-opus-5-5";
 const MAX_ARTICLES_PER_TOPIC = 20;
 // A web search turn can pause server-side after 10 iterations; resume a few times at most.
 const MAX_PAUSE_RESUMES = 3;
@@ -150,7 +150,7 @@ Respond with only a JSON array of objects with exactly those keys.`;
 
 	for (let attempt = 0; attempt <= MAX_PAUSE_RESUMES; attempt++) {
 		response = await client.beta.messages.create({
-			model: MODEL,
+			model: AGENT_MODEL,
 			max_tokens: 16000,
 			output_config: { effort: "medium" },
 			betas: ["server-side-fallback-2026-07-01"],

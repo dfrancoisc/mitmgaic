@@ -1,22 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Article } from "./articles";
 import { BadRequest } from "./articles";
+import { CHAT_MODELS, DEFAULT_CHAT_MODEL, modelName } from "./models";
 
-// Short names map to the current model of each tier; full IDs are accepted as-is.
-// "fast" and "capable" are the two options the dashboard offers.
-const MODELS: Record<string, string> = {
-	opus: "claude-opus-5-5",
-	capable: "claude-opus-5-5",
-	sonnet: "claude-sonnet-5-5",
-	haiku: "claude-haiku-5-5",
-	fast: "claude-haiku-5-5",
-};
-const DEFAULT_MODEL = MODELS.opus;
-const ALLOWED_MODELS = new Set(Object.values(MODELS));
+// Model choices live in models.ts; full model IDs are accepted as-is.
+const ALLOWED_MODELS = new Set(Object.values(CHAT_MODELS));
 // Server-side refusal fallback isn't available for Haiku.
-const SUPPORTS_FALLBACK = new Set([MODELS.opus, MODELS.sonnet]);
+const SUPPORTS_FALLBACK = new Set(["claude-opus-5-5", "claude-sonnet-5-5"]);
 // The dynamic-filtering web search tool is documented for Opus and Sonnet; Haiku gets the basic tool.
-const SUPPORTS_DYNAMIC_WEB_SEARCH = new Set([MODELS.opus, MODELS.sonnet]);
+const SUPPORTS_DYNAMIC_WEB_SEARCH = new Set(["claude-opus-5-5", "claude-sonnet-5-5"]);
 
 const MAX_QUESTION_CHARS = 2000;
 const CONTEXT_ARTICLES = 12;
@@ -65,7 +57,10 @@ export interface WebSource {
 
 export interface ChatResult {
 	answer: string;
+	/** The model that actually answered; differs from requested_model if a refusal fallback ran. */
 	model: string;
+	model_name: string;
+	requested_model: string;
 	web_search: boolean;
 	sources: ChatSource[];
 	web_sources: WebSource[];
@@ -82,12 +77,12 @@ export interface ChatRequest {
 export class ChatRefused extends Error {}
 
 export function resolveModel(requested: unknown): string {
-	if (requested === undefined || requested === null || requested === "") return DEFAULT_MODEL;
+	if (requested === undefined || requested === null || requested === "") return DEFAULT_CHAT_MODEL;
 	if (typeof requested !== "string") throw new BadRequest("model must be a string");
 	const key = requested.trim().toLowerCase();
-	const model = MODELS[key] ?? key;
+	const model = CHAT_MODELS[key] ?? key;
 	if (!ALLOWED_MODELS.has(model)) {
-		throw new BadRequest(`Unsupported model "${requested}". Use one of: ${[...Object.keys(MODELS), ...ALLOWED_MODELS].join(", ")}`);
+		throw new BadRequest(`Unsupported model "${requested}". Use one of: ${[...Object.keys(CHAT_MODELS), ...ALLOWED_MODELS].join(", ")}`);
 	}
 	return model;
 }
@@ -158,7 +153,7 @@ export async function chat(env: Env, { question, model, webSearch }: ChatRequest
 		? context
 				.map(
 					(a, i) =>
-						`[${i + 1}] ${a.headline}\nSource: ${a.source ?? "unknown"} | Published: ${a.published_at ?? "unknown"} | Topic: ${a.topic}\nURL: ${a.url}\nSummary: ${a.summary ?? "(none)"}`,
+						`[${i + 1}] ${a.headline}\nSource: ${a.source ?? "unknown"} | Published: ${a.published_at ?? "unknown"} | Topic: ${a.topic} | Relevance score: ${a.relevance_score ?? "unscored"}/10\nURL: ${a.url}\nSummary: ${a.summary ?? "(none)"}`,
 				)
 				.join("\n\n")
 		: "(No articles are stored yet.)";
@@ -246,6 +241,8 @@ export async function chat(env: Env, { question, model, webSearch }: ChatRequest
 	return {
 		answer,
 		model: response.model,
+		model_name: modelName(response.model),
+		requested_model: model,
 		web_search: webSearch,
 		sources,
 		web_sources: [...webSources.values()],

@@ -715,7 +715,8 @@ select option {
 
 .chat-thread {
 	flex: 1;
-	min-height: 0;
+	/* Keeps the conversation usable when Under the Hood is open. */
+	min-height: 180px;
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	padding: 18px 16px;
@@ -1101,8 +1102,129 @@ select option {
 .hood-body {
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
+	gap: 16px;
+	max-height: min(34vh, 320px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	padding: 2px 16px 16px;
+}
+
+/* Active model line under the Fast/Capable switch */
+
+.model-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: -2px 2px 0;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.model-line-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.model-line strong {
+	color: var(--text);
+	font-weight: 600;
+}
+
+.model-line code,
+.config-list code {
+	padding: 1px 5px;
+	border-radius: 5px;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	color: var(--text-muted);
+	font: 500 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.link-btn {
+	flex-shrink: 0;
+	margin-left: auto;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--accent);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.link-btn:hover {
+	text-decoration: underline;
+}
+
+/* LLM configuration list */
+
+.config-list {
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+	overflow: hidden;
+}
+
+.config-list > div {
+	display: grid;
+	grid-template-columns: 112px minmax(0, 1fr);
+	gap: 10px;
+	padding: 8px 10px;
+	border-top: 1px solid var(--border);
+	font-size: 12.5px;
+}
+
+.config-list > div:first-child {
+	border-top: 0;
+}
+
+.config-list > div.in-use {
+	background: var(--accent-soft);
+}
+
+.config-list dt {
+	color: var(--text-muted);
+	font-weight: 600;
+}
+
+.config-list dd {
+	margin: 0;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.config-list a {
+	color: var(--accent);
+	font-weight: 600;
+}
+
+.in-use-tag {
+	margin-left: 6px;
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: var(--accent);
+	color: var(--accent-text);
+	font-size: 10px;
+	font-weight: 700;
+	vertical-align: 1px;
+}
+
+.config-note {
+	display: block;
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-size: 11.5px;
+}
+
+.chip.fallback {
+	border-color: transparent;
+	background: var(--score-mid-bg);
+	color: var(--score-mid-fg);
 }
 
 .switch-row {
