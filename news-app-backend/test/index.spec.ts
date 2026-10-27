@@ -1,6 +1,8 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { extractJsonArray, normalizeArticles, storeArticles, type CandidateArticle } from "../src/agent";
+import type { Article } from "../src/articles";
+import { rankArticles, resolveModel } from "../src/chat";
 import { isSevenAmInNewYork } from "../src/index";
 
 const SELF = exports.default;
@@ -145,6 +147,47 @@ describe("storing articles", () => {
 		expect(results[0]).toEqual({ oldest: "2026-10-06", n: 20 });
 		const other = await env.DB.prepare("SELECT COUNT(*) AS n FROM articles WHERE topic = 'Other'").first<number>("n");
 		expect(other).toBe(1);
+	});
+});
+
+describe("/chat", () => {
+	// Validation and auth only: a valid authorized request would call the real Claude API.
+	const auth = { Authorization: "Bearer test-agent-secret", "Content-Type": "application/json" };
+	const post = (body: string, headers: Record<string, string> = auth) =>
+		SELF.fetch("https://x/chat", { method: "POST", headers, body });
+
+	it("requires the password", async () => {
+		expect((await post('{"question":"hi"}', { "Content-Type": "application/json" })).status).toBe(401);
+	});
+
+	it("rejects bad input with 400 before calling Claude", async () => {
+		for (const body of ["not json", "{}", '{"question":"  "}', '{"question":"hi","model":"gpt-4"}', `{"question":"${"x".repeat(2001)}"}`]) {
+			const res = await post(body);
+			expect(res.status, body.slice(0, 40)).toBe(400);
+		}
+	});
+
+	it("resolves model preferences", () => {
+		expect(resolveModel(undefined)).toBe("claude-opus-5-5");
+		expect(resolveModel("Sonnet")).toBe("claude-sonnet-5-5");
+		expect(resolveModel("haiku")).toBe("claude-haiku-5-5");
+		expect(resolveModel("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
+		expect(() => resolveModel("claude-3-opus")).toThrow(/Unsupported model/);
+	});
+
+	it("ranks keyword matches first and falls back to fresh, high-scoring articles", () => {
+		const art = (id: number, headline: string, summary: string, score: number, date: string): Article => ({
+			id, topic: "T", headline, source: "S", published_at: date, url: `https://x/${id}`, summary, relevance_score: score, fetched_at: date,
+		});
+		const now = new Date("2026-10-27T12:00:00Z");
+		const list = [
+			art(1, "Snowflake joins Oracle cloud", "Snowflake on OCI", 6, "2026-10-20"),
+			art(2, "ONC finalizes HTI-5 rule", "Certification criteria cut", 9, "2026-10-26"),
+			art(3, "Epic launches AI scribe", "HTI-5 mentioned briefly", 7, "2026-10-27"),
+		];
+		expect(rankArticles("What changed in the HTI-5 rule?", list, now).map((a) => a.id)).toEqual([2, 3]);
+		// No keyword overlap: every article stays in, ordered by relevance score plus freshness.
+		expect(rankArticles("what's going on?", list, now).map((a) => a.id)).toEqual([2, 3, 1]);
 	});
 });
 
