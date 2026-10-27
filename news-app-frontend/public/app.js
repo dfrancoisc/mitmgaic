@@ -9,6 +9,8 @@ const TOPICS = [
 	"Stock & market news",
 ];
 
+const MIN_DISPLAY_SCORE = 7;
+
 // Shown under a topic heading. Keep in sync with TOPIC_FOCUS in news-app-backend/src/agent.ts.
 const TOPIC_NOTES = {
 	"Stock & market news": "News that could affect VTI · VTV · VXUS · VASGX (LifeStrategy Growth 80/20)",
@@ -43,8 +45,10 @@ async function loadArticles() {
 	const seq = ++loadSeq;
 	const params = new URLSearchParams();
 	if (els.topic.value) params.set("topic", els.topic.value);
-	if (els.minScore.value) params.set("min_score", els.minScore.value);
+	// Articles scored below MIN_DISPLAY_SCORE are never shown; the filter can only raise the bar.
+	params.set("min_score", String(Math.max(MIN_DISPLAY_SCORE, Number(els.minScore.value) || 0)));
 	params.set("limit", els.limit.value);
+	params.set("sort", "relevance"); // highest-ranked first (ties: newest first)
 
 	els.articles.setAttribute("aria-busy", "true");
 	els.articles.style.opacity = "0.55";

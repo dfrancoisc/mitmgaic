@@ -92,8 +92,16 @@ describe("/articles", () => {
 		expect(await get("limit=1")).toBe(1);
 	});
 
+	it("sorts by relevance score when asked, newest first among ties", async () => {
+		const body = await (await SELF.fetch("https://x/articles?sort=relevance")).json<any>();
+		// Seeded scores: A=9, C=7, B=4.
+		expect(body.articles.map((a: any) => a.headline)).toEqual(["A", "C", "B"]);
+		const ranked7 = await (await SELF.fetch("https://x/articles?sort=relevance&min_score=7")).json<any>();
+		expect(ranked7.articles.map((a: any) => a.relevance_score)).toEqual([9, 7]);
+	});
+
 	it("rejects invalid filters with 400", async () => {
-		for (const q of ["min_score=11", "limit=0", "from=10/20/2026"]) {
+		for (const q of ["min_score=11", "limit=0", "from=10/20/2026", "sort=random", "sort=constructor"]) {
 			const res = await SELF.fetch(`https://x/articles?${q}`);
 			expect(res.status, q).toBe(400);
 		}

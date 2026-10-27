@@ -16,9 +16,16 @@ export interface Article {
 
 export class BadRequest extends Error {}
 
+// Fixed SQL fragments chosen by the `sort` param (never interpolated from user input).
+const ORDER_BY = {
+	date: "published_at DESC NULLS LAST, relevance_score DESC, id DESC",
+	relevance: "relevance_score DESC NULLS LAST, published_at DESC NULLS LAST, id DESC",
+};
+
 /**
  * Query params: topic, source (both case-insensitive exact match), from / to
- * (YYYY-MM-DD, inclusive, on publication date), min_score (1-10), limit (1-200).
+ * (YYYY-MM-DD, inclusive, on publication date), min_score (1-10), limit (1-200),
+ * sort ("date", the default, newest first; or "relevance", highest score first).
  */
 export async function listArticles(db: D1Database, params: URLSearchParams) {
 	const where: string[] = [];
@@ -64,9 +71,12 @@ export async function listArticles(db: D1Database, params: URLSearchParams) {
 		throw new BadRequest(`limit must be an integer from 1 to ${MAX_LIMIT}`);
 	}
 
+	const sort = params.get("sort") ?? "date";
+	if (!Object.hasOwn(ORDER_BY, sort)) throw new BadRequest(`sort must be one of: ${Object.keys(ORDER_BY).join(", ")}`);
+
 	const sql = `SELECT * FROM articles
 		${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-		ORDER BY published_at DESC NULLS LAST, relevance_score DESC, id DESC
+		ORDER BY ${ORDER_BY[sort as keyof typeof ORDER_BY]}
 		LIMIT ?`;
 	const [articles, latest] = await db.batch([
 		db.prepare(sql).bind(...binds, limit),
