@@ -1,29 +1,135 @@
-import {
-	env,
-	createExecutionContext,
-	waitOnExecutionContext,
-	SELF,
-} from "cloudflare:test";
-import { describe, it, expect } from "vitest";
-import worker from "../src/index";
+import { env, exports } from "cloudflare:workers";
+import { beforeEach, describe, expect, it } from "vitest";
+import { extractJsonArray, normalizeArticles, storeArticles, type CandidateArticle } from "../src/agent";
+import { isSevenAmInNewYork } from "../src/index";
 
-// For now, you'll need to do something like this to get a correctly-typed
-// `Request` to pass to `worker.fetch()`.
-const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
+const SELF = exports.default;
 
-describe("Hello World worker", () => {
-	it("responds with Hello World! (unit style)", async () => {
-		const request = new IncomingRequest("http://example.com");
-		// Create an empty context to pass to `worker.fetch()`.
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		// Wait for all `Promise`s passed to `ctx.waitUntil()` to settle before running test assertions
-		await waitOnExecutionContext(ctx);
-		expect(await response.text()).toMatchInlineSnapshot(`"Hello World!"`);
+async function seed() {
+	await env.DB.exec("DELETE FROM articles");
+	const insert = env.DB.prepare(
+		`INSERT INTO articles (topic, headline, source, published_at, url, summary, relevance_score)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	);
+	await env.DB.batch([
+		insert.bind("AI in healthcare", "A", "STAT", "2026-10-20", "https://a.example/1", "s", 9),
+		insert.bind("AI in healthcare", "B", "Fierce", "2026-10-25", "https://a.example/2", "s", 4),
+		insert.bind("Artificial intelligence", "C", "STAT", "2026-10-26", "https://a.example/3", "s", 7),
+	]);
+}
+
+describe("/health", () => {
+	it("returns ok with a timestamp and CORS headers", async () => {
+		const res = await SELF.fetch("https://x/health");
+		expect(res.status).toBe(200);
+		expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+		const body = await res.json<{ status: string; timestamp: string }>();
+		expect(body.status).toBe("ok");
+		expect(Number.isNaN(Date.parse(body.timestamp))).toBe(false);
+	});
+});
+
+describe("CORS and routing", () => {
+	it("answers preflight requests", async () => {
+		const res = await SELF.fetch("https://x/articles", { method: "OPTIONS" });
+		expect(res.status).toBe(204);
+		expect(res.headers.get("Access-Control-Allow-Methods")).toContain("GET");
 	});
 
-	it("responds with Hello World! (integration style)", async () => {
-		const response = await SELF.fetch("https://example.com");
-		expect(await response.text()).toMatchInlineSnapshot(`"Hello World!"`);
+	it("returns 404 JSON with CORS for unknown paths", async () => {
+		const res = await SELF.fetch("https://x/nope");
+		expect(res.status).toBe(404);
+		expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+	});
+
+	it("rejects GET on /agent without calling Claude", async () => {
+		const res = await SELF.fetch("https://x/agent");
+		expect(res.status).toBe(405);
+	});
+});
+
+describe("/articles", () => {
+	beforeEach(seed);
+
+	it("returns all articles newest first with a count", async () => {
+		const body = await (await SELF.fetch("https://x/articles")).json<any>();
+		expect(body.count).toBe(3);
+		expect(body.articles.map((a: any) => a.headline)).toEqual(["C", "B", "A"]);
+	});
+
+	it("filters by topic, source, date range, min_score and limit", async () => {
+		const get = async (q: string) => (await (await SELF.fetch(`https://x/articles?${q}`)).json<any>()).count;
+		expect(await get("topic=ai%20in%20healthcare")).toBe(2);
+		expect(await get("source=stat")).toBe(2);
+		expect(await get("from=2026-10-21&to=2026-10-25")).toBe(1);
+		expect(await get("min_score=7")).toBe(2);
+		expect(await get("limit=1")).toBe(1);
+	});
+
+	it("rejects invalid filters with 400", async () => {
+		for (const q of ["min_score=11", "limit=0", "from=10/20/2026"]) {
+			const res = await SELF.fetch(`https://x/articles?${q}`);
+			expect(res.status, q).toBe(400);
+		}
+	});
+});
+
+describe("Claude response parsing", () => {
+	it("extracts a JSON array from text joined across blocks", () => {
+		const blocks = ["Here are the results:\n```json\n[{\"headline\": \"X\",", " \"url\": \"https://x.example\"}]\n```"];
+		expect(extractJsonArray(blocks.join(""))).toEqual([{ headline: "X", url: "https://x.example" }]);
+	});
+
+	it("throws when there is no array", () => {
+		expect(() => extractJsonArray("No news found.")).toThrow();
+	});
+
+	it("drops invalid items and clamps scores", () => {
+		const { articles, invalid } = normalizeArticles([
+			{ headline: "Ok", url: "https://ok.example", relevance_score: 14, published_date: "2026-10-26T08:00:00Z" },
+			{ headline: "No url" },
+			"junk",
+		]);
+		expect(invalid).toBe(2);
+		expect(articles[0]).toMatchObject({ relevance_score: 10, published_date: "2026-10-26" });
+	});
+});
+
+describe("storing articles", () => {
+	const article = (n: number, day: number): CandidateArticle => ({
+		headline: `H${n}`,
+		source: "S",
+		published_date: `2026-10-${String(day).padStart(2, "0")}`,
+		url: `https://s.example/${n}`,
+		summary: "s",
+		relevance_score: 5,
+	});
+
+	beforeEach(() => env.DB.exec("DELETE FROM articles"));
+
+	it("skips URLs already stored or repeated in the same batch", async () => {
+		expect(await storeArticles(env.DB, "T", [article(1, 1), article(2, 2)])).toEqual({ inserted: 2, removed: 0 });
+		const again = await storeArticles(env.DB, "T", [article(1, 1), article(3, 3), article(3, 3)]);
+		expect(again).toEqual({ inserted: 1, removed: 0 });
+	});
+
+	it("caps each topic at 20 by removing the oldest", async () => {
+		await storeArticles(env.DB, "Other", [article(100, 1)]);
+		const batch = Array.from({ length: 25 }, (_, i) => article(i, i + 1)); // days 1..25
+		expect(await storeArticles(env.DB, "T", batch)).toEqual({ inserted: 25, removed: 5 });
+
+		const { results } = await env.DB.prepare("SELECT MIN(published_at) AS oldest, COUNT(*) AS n FROM articles WHERE topic = 'T'").all<{ oldest: string; n: number }>();
+		expect(results[0]).toEqual({ oldest: "2026-10-06", n: 20 });
+		const other = await env.DB.prepare("SELECT COUNT(*) AS n FROM articles WHERE topic = 'Other'").first<number>("n");
+		expect(other).toBe(1);
+	});
+});
+
+describe("schedule", () => {
+	it("fires at 7 AM New York time in both daylight and standard time", () => {
+		expect(isSevenAmInNewYork(new Date("2026-10-27T11:00:00Z"))).toBe(true); // EDT
+		expect(isSevenAmInNewYork(new Date("2026-10-27T12:00:00Z"))).toBe(false);
+		expect(isSevenAmInNewYork(new Date("2026-12-01T12:00:00Z"))).toBe(true); // EST
+		expect(isSevenAmInNewYork(new Date("2026-12-01T11:00:00Z"))).toBe(false);
 	});
 });

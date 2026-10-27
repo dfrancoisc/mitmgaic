@@ -6,6 +6,11 @@
 	"observability": {
 		"enabled": true,
 	},
+	// 7 AM New York time: 11:00 UTC during daylight time, 12:00 UTC otherwise.
+	// The scheduled handler skips whichever of the two isn't 7 AM locally.
+	"triggers": {
+		"crons": ["0 11 * * *", "0 12 * * *"],
+	},
 	"d1_databases": [
 		{
 			"binding": "DB",
