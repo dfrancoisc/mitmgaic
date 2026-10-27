@@ -72,7 +72,8 @@ async function runAgent() {
 	showStatus("info", "Searching the web for new articles on every topic. This usually takes about a minute…");
 
 	try {
-		const res = await fetch(`${API_BASE}/agent`, { method: "POST" });
+		// Same-origin proxy (src/worker.js) adds the agent password server-side.
+		const res = await fetch("/api/agent", { method: "POST" });
 		const data = await res.json();
 		if (!res.ok) throw new Error(data.detail || data.error || `Request failed (${res.status})`);
 

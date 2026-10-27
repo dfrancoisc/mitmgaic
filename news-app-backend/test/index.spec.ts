@@ -48,6 +48,28 @@ describe("CORS and routing", () => {
 	});
 });
 
+describe("/agent authorization", () => {
+	// Only rejection paths are tested here: an authorized request would call the real Claude API.
+	it("rejects a request with no password", async () => {
+		const res = await SELF.fetch("https://x/agent", { method: "POST" });
+		expect(res.status).toBe(401);
+		expect(res.headers.get("WWW-Authenticate")).toContain("Bearer");
+		expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+	});
+
+	it("rejects a wrong password, including one that differs only in length", async () => {
+		for (const auth of ["Bearer wrong", "Bearer test-agent-secretX", "Basic dGVzdA==", "test-agent-secret"]) {
+			const res = await SELF.fetch("https://x/agent", { method: "POST", headers: { Authorization: auth } });
+			expect(res.status, auth).toBe(401);
+		}
+	});
+
+	it("keeps /health and /articles public", async () => {
+		expect((await SELF.fetch("https://x/health")).status).toBe(200);
+		expect((await SELF.fetch("https://x/articles")).status).toBe(200);
+	});
+});
+
 describe("/articles", () => {
 	beforeEach(seed);
 

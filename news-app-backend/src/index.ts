@@ -15,6 +15,19 @@ function json(body: unknown, status = 200): Response {
 	});
 }
 
+/** Checks `Authorization: Bearer <AGENT_SECRET>` without leaking timing information. */
+async function isAuthorized(request: Request, secret: string): Promise<boolean> {
+	const match = request.headers.get("Authorization")?.match(/^Bearer\s+(.+)$/i);
+	if (!match) return false;
+	// Hash both sides so the comparison is constant-time and length-independent.
+	const enc = new TextEncoder();
+	const [given, expected] = await Promise.all([
+		crypto.subtle.digest("SHA-256", enc.encode(match[1].trim())),
+		crypto.subtle.digest("SHA-256", enc.encode(secret)),
+	]);
+	return crypto.subtle.timingSafeEqual(given, expected);
+}
+
 /** Cron triggers run in UTC, so two are scheduled and only the one landing on 7 AM New York time runs. */
 export function isSevenAmInNewYork(date: Date): boolean {
 	const hour = new Intl.DateTimeFormat("en-US", {
@@ -40,6 +53,15 @@ export default {
 				case "/agent":
 					if (request.method !== "POST") {
 						return json({ error: "Use POST to run the agent" }, 405);
+					}
+					// Fail closed: without a configured secret nobody can trigger a paid run.
+					if (!env.AGENT_SECRET) {
+						return json({ error: "Agent endpoint is not configured" }, 503);
+					}
+					if (!(await isAuthorized(request, env.AGENT_SECRET))) {
+						const res = json({ error: "Unauthorized: a valid Authorization: Bearer <password> header is required" }, 401);
+						res.headers.set("WWW-Authenticate", 'Bearer realm="news-agent"');
+						return res;
 					}
 					return json(await runAgent(env));
 

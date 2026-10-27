@@ -8,6 +8,7 @@ export default defineConfig({
 			miniflare: {
 				bindings: {
 					ANTHROPIC_API_KEY: "test-key",
+					AGENT_SECRET: "test-agent-secret",
 					TEST_MIGRATIONS: await readD1Migrations("./migrations"),
 				},
 			},
