@@ -4,22 +4,27 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>News Intelligence</title>
-		<meta name="description" content="AI-curated news on healthcare IT, AI and data platforms." />
-		<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232563eb'/><path d='M9 22V10h3l8 8.5V10h3v12h-3l-8-8.5V22z' fill='white'/></svg>" />
+		<meta name="description" content="AI-curated news on healthcare IT, AI and data platforms, with a chat assistant." />
+		<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%234f46e5'/><stop offset='1' stop-color='%237c3aed'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='url(%23g)'/><path d='M9 22V10h3l8 8.5V10h3v12h-3l-8-8.5V22z' fill='white'/></svg>" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 		<link rel="stylesheet" href="styles.css" />
 	</head>
 	<body>
 		<header class="site-header">
 			<div class="container header-inner">
 				<div class="brand">
-					<span class="brand-mark" aria-hidden="true">N</span>
+					<span class="brand-mark" aria-hidden="true">
+						<svg viewBox="0 0 24 24"><path d="M4 19V5h3.2l9.6 9.9V5H20v14h-3.2L7.2 9.1V19z" /></svg>
+					</span>
 					<div>
 						<h1>News Intelligence</h1>
-						<p class="subtitle">AI-curated news, scored for relevance</p>
+						<p class="subtitle">AI-curated briefings, scored for relevance</p>
 					</div>
 				</div>
 				<div class="header-actions">
-					<p class="refreshed" id="last-refreshed" aria-live="polite">Loading…</p>
+					<p class="refreshed" aria-live="polite"><span class="live-dot" aria-hidden="true"></span><span id="last-refreshed">Loading…</span></p>
 					<button type="button" class="btn btn-primary" id="refresh-btn">
 						<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
 						<span class="btn-label">Refresh</span>
@@ -29,85 +34,129 @@
 		</header>
 
 		<main class="container layout">
+			<div class="content">
+				<form class="toolbar" id="filters" aria-label="Filter articles">
+					<label class="pill-select">
+						<span class="pill-label">Topic</span>
+						<select name="topic" id="topic">
+							<option value="">All topics</option>
+						</select>
+					</label>
+					<label class="pill-select">
+						<span class="pill-label">Min score</span>
+						<select name="min_score" id="min-score">
+							<option value="">Any</option>
+							<option value="5">5+</option>
+							<option value="7">7+</option>
+							<option value="8">8+</option>
+							<option value="9">9+</option>
+						</select>
+					</label>
+					<label class="pill-select">
+						<span class="pill-label">Show</span>
+						<select name="limit" id="limit">
+							<option value="10">10</option>
+							<option value="25">25</option>
+							<option value="50" selected>50</option>
+							<option value="100">100</option>
+						</select>
+					</label>
+					<p class="result-count" id="result-count" aria-live="polite"></p>
+				</form>
+
+				<div class="status" id="status" role="status" hidden></div>
+
+				<div id="articles" aria-busy="true">
+					<div class="skeleton-group">
+						<div class="skeleton skeleton-heading"></div>
+						<div class="grid">
+							<div class="skeleton skeleton-card"></div>
+							<div class="skeleton skeleton-card"></div>
+							<div class="skeleton skeleton-card"></div>
+						</div>
+					</div>
+				</div>
+			</div>
+
 			<aside class="chat-panel" aria-labelledby="chat-title">
 				<div class="chat-header">
-					<h2 id="chat-title">Ask about the news</h2>
-					<p class="chat-hint">Answers use only the stored articles, with numbered sources.</p>
+					<div class="chat-title-row">
+						<span class="chat-icon" aria-hidden="true">
+							<svg viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z" /></svg>
+						</span>
+						<div>
+							<h2 id="chat-title">Ask the news</h2>
+							<p class="chat-hint">Answers cite the stored articles</p>
+						</div>
+					</div>
+					<div class="segmented" role="radiogroup" aria-label="Model">
+						<label class="segment" title="Claude Haiku 5.5: quick answers">
+							<input type="radio" name="chat-model" value="fast" checked />
+							<span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z" /></svg>Fast</span>
+						</label>
+						<label class="segment" title="Claude Opus 5.5: deeper, more thorough answers">
+							<input type="radio" name="chat-model" value="capable" />
+							<span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z" /></svg>Capable</span>
+						</label>
+					</div>
 				</div>
 
 				<div class="chat-thread" id="chat-thread" aria-live="polite">
 					<div class="chat-empty" id="chat-empty">
-						<p>Try one of these:</p>
-						<button type="button" class="suggestion">What does the HTI-5 rule change?</button>
-						<button type="button" class="suggestion">What's new in AI in healthcare this week?</button>
-						<button type="button" class="suggestion">Summarize the biggest cloud and data platform news.</button>
+						<p class="chat-empty-title">What do you want to know?</p>
+						<p class="chat-empty-text">Ask about anything in today's articles.</p>
+						<div class="suggestions">
+							<button type="button" class="suggestion">What does the HTI-5 rule change?</button>
+							<button type="button" class="suggestion">What's new in AI in healthcare this week?</button>
+							<button type="button" class="suggestion">Summarize the biggest cloud and data platform news.</button>
+						</div>
 					</div>
 				</div>
 
-				<form class="chat-form" id="chat-form">
-					<label class="visually-hidden" for="chat-input">Your question</label>
-					<textarea id="chat-input" rows="2" maxlength="2000" placeholder="Ask a question about these articles…" required></textarea>
-					<div class="chat-controls">
-						<label class="model-picker">
-							<span>Model</span>
-							<select id="chat-model">
-								<option value="opus">Opus 5.5 · most capable</option>
-								<option value="sonnet">Sonnet 5.5 · balanced</option>
-								<option value="haiku">Haiku 5.5 · fastest</option>
-							</select>
-						</label>
-						<button type="submit" class="btn btn-primary" id="chat-submit">Ask</button>
+				<form class="composer" id="chat-form">
+					<div class="composer-box">
+						<label class="visually-hidden" for="chat-input">Your question</label>
+						<textarea id="chat-input" rows="1" maxlength="2000" placeholder="Ask about the news…" required></textarea>
+						<button type="submit" class="btn btn-send" id="chat-submit">
+							<span class="send-label">Send</span>
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-2.5-6.5z" /></svg>
+						</button>
 					</div>
+					<p class="composer-note"><span id="web-search-badge" class="web-badge" hidden>Web search on</span><span>Enter to send · Shift+Enter for a new line</span></p>
 				</form>
-			</aside>
 
-			<div class="content">
-			<form class="filters" id="filters" aria-label="Filter articles">
-				<label class="field">
-					<span>Topic</span>
-					<select name="topic" id="topic">
-						<option value="">All topics</option>
-					</select>
-				</label>
-				<label class="field">
-					<span>Minimum relevance</span>
-					<select name="min_score" id="min-score">
-						<option value="">Any score</option>
-						<option value="5">5+</option>
-						<option value="7">7+</option>
-						<option value="8">8+</option>
-						<option value="9">9+</option>
-					</select>
-				</label>
-				<label class="field">
-					<span>Show</span>
-					<select name="limit" id="limit">
-						<option value="10">10 articles</option>
-						<option value="25">25 articles</option>
-						<option value="50" selected>50 articles</option>
-						<option value="100">100 articles</option>
-					</select>
-				</label>
-				<p class="result-count" id="result-count" aria-live="polite"></p>
-			</form>
-
-			<div class="status" id="status" role="status" hidden></div>
-
-			<div id="articles" aria-busy="true">
-				<div class="skeleton-group">
-					<div class="skeleton skeleton-heading"></div>
-					<div class="grid">
-						<div class="skeleton skeleton-card"></div>
-						<div class="skeleton skeleton-card"></div>
-						<div class="skeleton skeleton-card"></div>
+				<details class="under-hood" id="under-hood">
+					<summary>
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zm7.4-2.5.1-1-.1-1 2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1l-.4-2.6h-4l-.3 2.6a7 7 0 0 0-1.8 1l-2.4-1-2 3.4L4.6 11l-.1 1 .1 1-2 1.6 2 3.4 2.4-1c.5.4 1.1.8 1.8 1l.3 2.6h4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.4 1 2-3.4z" /></svg>
+						Under the Hood
+						<span class="chevron" aria-hidden="true"></span>
+					</summary>
+					<div class="hood-body">
+						<div class="switch-row">
+							<div>
+								<p class="switch-title" id="web-search-label">Web search</p>
+								<p class="switch-desc">Let Claude search the web for information that isn't in the database. Slower, and uses more tokens.</p>
+							</div>
+							<button type="button" class="switch" id="web-search-toggle" role="switch" aria-checked="false" aria-labelledby="web-search-label"><span class="switch-thumb"></span></button>
+						</div>
+						<div class="hood-stats">
+							<p class="hood-stats-title">Last response</p>
+							<dl class="stats-grid" id="hood-stats">
+								<div><dt>Articles pulled</dt><dd data-stat="articles">–</dd></div>
+								<div><dt>Context tokens</dt><dd data-stat="context">–</dd></div>
+								<div><dt>Input tokens</dt><dd data-stat="input">–</dd></div>
+								<div><dt>Output tokens</dt><dd data-stat="output">–</dd></div>
+								<div><dt>Web searches</dt><dd data-stat="searches">–</dd></div>
+								<div><dt>Model</dt><dd data-stat="model">–</dd></div>
+							</dl>
+						</div>
 					</div>
-				</div>
-			</div>
-			</div>
+				</details>
+			</aside>
 		</main>
 
 		<footer class="container footer">
-			Summaries and relevance scores are generated by Claude from web search results. Always check the original source.
+			Summaries, scores and answers are generated by Claude from web sources. Always check the original article.
 		</footer>
 
 		<template id="card-template">

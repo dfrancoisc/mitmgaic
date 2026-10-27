@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { extractJsonArray, normalizeArticles, storeArticles, type CandidateArticle } from "../src/agent";
 import type { Article } from "../src/articles";
-import { rankArticles, resolveModel } from "../src/chat";
+import { parseChatRequest, rankArticles, resolveModel } from "../src/chat";
 import { isSevenAmInNewYork } from "../src/index";
 
 const SELF = exports.default;
@@ -161,7 +161,7 @@ describe("/chat", () => {
 	});
 
 	it("rejects bad input with 400 before calling Claude", async () => {
-		for (const body of ["not json", "{}", '{"question":"  "}', '{"question":"hi","model":"gpt-4"}', `{"question":"${"x".repeat(2001)}"}`]) {
+		for (const body of ["not json", "{}", '{"question":"  "}', '{"question":"hi","model":"gpt-4"}', `{"question":"${"x".repeat(2001)}"}`, '{"question":"hi","web_search":"yes"}']) {
 			const res = await post(body);
 			expect(res.status, body.slice(0, 40)).toBe(400);
 		}
@@ -172,7 +172,15 @@ describe("/chat", () => {
 		expect(resolveModel("Sonnet")).toBe("claude-sonnet-5-5");
 		expect(resolveModel("haiku")).toBe("claude-haiku-5-5");
 		expect(resolveModel("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
+		expect(resolveModel("fast")).toBe("claude-haiku-5-5");
+		expect(resolveModel("capable")).toBe("claude-opus-5-5");
 		expect(() => resolveModel("claude-3-opus")).toThrow(/Unsupported model/);
+	});
+
+	it("parses the web search toggle, defaulting to off", () => {
+		expect(parseChatRequest({ question: "q" }).webSearch).toBe(false);
+		expect(parseChatRequest({ question: "q", web_search: true }).webSearch).toBe(true);
+		expect(parseChatRequest({ question: "q", web_search: false }).webSearch).toBe(false);
 	});
 
 	it("ranks keyword matches first and falls back to fresh, high-scoring articles", () => {

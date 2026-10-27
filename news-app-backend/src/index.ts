@@ -85,8 +85,7 @@ export default {
 					} catch {
 						return json({ error: "Body must be valid JSON" }, 400);
 					}
-					const { question, model } = parseChatRequest(body);
-					return json(await chat(env, question, model));
+					return json(await chat(env, parseChatRequest(body)));
 				}
 
 				case "/articles":

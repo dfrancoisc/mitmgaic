@@ -127,6 +127,8 @@ function render(articles) {
 
 		const section = document.createElement("section");
 		section.className = "topic-group";
+		const colorIndex = TOPICS.indexOf(topic);
+		if (colorIndex !== -1) section.style.setProperty("--topic-color", `var(--topic-${colorIndex % 4})`);
 		const id = `topic-${slug(topic)}`;
 		section.setAttribute("aria-labelledby", id);
 

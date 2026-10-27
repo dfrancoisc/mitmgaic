@@ -10,7 +10,9 @@
 		"run_worker_first": ["/api/*"],
 	},
 	// Calls the backend Worker directly. AGENT_SECRET is a secret: `wrangler secret put AGENT_SECRET`.
-	"services": [{ "binding": "BACKEND", "service": "news-app-backend" }],
+	// `remote: true` makes `wrangler dev` call the deployed backend instead of needing it running locally.
+	// For local dev, put AGENT_SECRET in news-app-frontend/.dev.vars (gitignored).
+	"services": [{ "binding": "BACKEND", "service": "news-app-backend", "remote": true }],
 	// Explicitly empty so a deploy clears any schedules left on this Worker name.
 	"triggers": {
 		"crons": [],
